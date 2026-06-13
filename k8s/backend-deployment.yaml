@@ -1,0 +1,110 @@
+##############################################################################
+# k8s/backend-deployment.yaml
+# Deploys the Zuri Market backend with secrets from Azure Key Vault
+##############################################################################
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zurimarket-backend
+  namespace: zurimarket
+  labels:
+    app: zurimarket-backend
+    tier: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: zurimarket-backend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0          # Zero-downtime deployments
+  template:
+    metadata:
+      labels:
+        app: zurimarket-backend
+        tier: backend
+    spec:
+      serviceAccountName: zurimarket-sa
+
+      # Mount the CSI secret volume (pulls from Azure Key Vault)
+      volumes:
+        - name: secrets-store
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: "zurimarket-keyvault"
+
+      containers:
+        - name: backend
+          image: DOCKERHUB_USERNAME/zurimarket-backend:IMAGE_TAG
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5000
+
+          # Secrets injected from the CSI volume as env vars
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: PORT
+              value: "5000"
+            - name: STRIPE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: zurimarket-secrets
+                  key: STRIPE-SECRET-KEY
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: zurimarket-secrets
+                  key: DATABASE-URL
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: zurimarket-secrets
+                  key: JWT-SECRET
+
+          volumeMounts:
+            - name: secrets-store
+              mountPath: "/mnt/secrets"
+              readOnly: true
+
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zurimarket-backend-svc
+  namespace: zurimarket
+spec:
+  selector:
+    app: zurimarket-backend
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 5000
+  type: ClusterIP

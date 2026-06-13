@@ -1,0 +1,70 @@
+##############################################################################
+# k8s/frontend-deployment.yaml
+##############################################################################
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zurimarket-frontend
+  namespace: zurimarket
+  labels:
+    app: zurimarket-frontend
+    tier: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: zurimarket-frontend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: zurimarket-frontend
+        tier: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: DOCKERHUB_USERNAME/zurimarket-frontend:IMAGE_TAG
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+          # Vite bakes VITE_API_URL at build time, so no runtime env var needed here.
+          # Runtime env vars (NODE_ENV etc.) can be added below if required.
+          env: []
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "200m"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zurimarket-frontend-svc
+  namespace: zurimarket
+spec:
+  selector:
+    app: zurimarket-frontend
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+  type: ClusterIP

@@ -1,0 +1,32 @@
+##############################################################################
+# k8s/ingress.yaml
+# Traefik is pre-installed in k3s — this exposes the app on port 80/443
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: zurimarket-ingress
+  namespace: zurimarket
+  annotations:
+    kubernetes.io/ingress.class: "traefik"
+    traefik.ingress.kubernetes.io/router.entrypoints: "web,websecure"
+spec:
+  rules:
+    # Replace with your actual domain or use the VM public IP directly
+    - host: ""    # Leave empty to match any host (IP-based access)
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: zurimarket-backend-svc
+                port:
+                  number: 80
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: zurimarket-frontend-svc
+                port:
+                  number: 80
