@@ -141,8 +141,8 @@ jobs:
       - name: Build & push backend image
         uses: docker/build-push-action@v5
         with:
-          context: ./backend
-          file: ./backend/Dockerfile
+          context: ./zuriapp-backend-main
+          file: ./zuriapp-backend-main/Dockerfile
           push: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/zurimarket-backend:${{ github.sha }}
@@ -156,8 +156,8 @@ jobs:
       - name: Build & push frontend image
         uses: docker/build-push-action@v5
         with:
-          context: ./frontend
-          file: ./frontend/Dockerfile
+          context: ./zuriapp-frontend-main
+          file: ./zuriapp-frontend-main/Dockerfile
           push: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/zurimarket-frontend:${{ github.sha }}
