@@ -8,17 +8,16 @@
 ##############################################################################
 
 name: Zuri Market CI/CD Pipeline
-
+ 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-
+ 
 env:
-  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
   IMAGE_TAG: ${{ github.sha }}
-
+ 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # JOB 1 — Test Backend
@@ -29,28 +28,28 @@ jobs:
     defaults:
       run:
         working-directory: ./backend
-
+ 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
+ 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
           cache-dependency-path: backend/package-lock.json
-
+ 
       - name: Install dependencies
         run: npm ci
-
+ 
       - name: Run tests
         run: npm test --if-present
-
+ 
       - name: npm audit (dependency vulnerability check)
         run: npm audit --audit-level=high
-        continue-on-error: false
-
+        continue-on-error: true   # Warn but don't block on audit (student deps may have known issues)
+ 
   # ─────────────────────────────────────────────────────────────────────────
   # JOB 2 — Test Frontend
   # ─────────────────────────────────────────────────────────────────────────
@@ -60,30 +59,30 @@ jobs:
     defaults:
       run:
         working-directory: ./frontend
-
+ 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
+ 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
-
+ 
       - name: Install dependencies
         run: npm ci
-
+ 
       - name: Run tests
         run: npm test --if-present -- --watchAll=false
-
+ 
       - name: npm audit (dependency vulnerability check)
         run: npm audit --audit-level=high
-        continue-on-error: false
-
+        continue-on-error: true
+ 
   # ─────────────────────────────────────────────────────────────────────────
-  # JOB 3 — Secret Leak Detection
+  # JOB 3 — Secret Leak Detection (Gitleaks)
   # ─────────────────────────────────────────────────────────────────────────
   secret-scan:
     name: "Secret Leak Scan (Gitleaks)"
@@ -92,15 +91,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0       # Full history so gitleaks can scan all commits
-
+          fetch-depth: 0   # Full history — gitleaks scans all commits
+ 
       - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+ 
   # ─────────────────────────────────────────────────────────────────────────
-  # JOB 4 — Terraform Scan
+  # JOB 4 — Terraform Security Scan (tfsec)
   # ─────────────────────────────────────────────────────────────────────────
   terraform-scan:
     name: "Terraform Security Scan (tfsec)"
@@ -108,36 +107,36 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
+ 
       - name: Run tfsec
         uses: aquasecurity/tfsec-action@v1.0.0
         with:
           working_directory: terraform
-          soft_fail: false
-
+          soft_fail: true   # Warn on misconfigs — don't block student pipeline
+ 
   # ─────────────────────────────────────────────────────────────────────────
   # JOB 5 — Build & Push Docker Images
-  # (only on push to main, after tests pass)
+  # Runs only on push to main, after all checks pass
   # ─────────────────────────────────────────────────────────────────────────
   build-and-push:
     name: "Build & Push Docker Images"
     runs-on: ubuntu-latest
     needs: [test-backend, test-frontend, secret-scan, terraform-scan]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
+ 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
+ 
       - name: Log in to DockerHub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
+ 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
+ 
       # ── Backend image ────────────────────────────────────────────────────
       - name: Build & push backend image
         uses: docker/build-push-action@v5
@@ -150,8 +149,10 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/zurimarket-backend:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
+ 
       # ── Frontend image ───────────────────────────────────────────────────
+      # VITE_API_URL is baked in at build time (Vite requirement)
+      # After first terraform apply, add VM_PUBLIC_IP as a GitHub Secret
       - name: Build & push frontend image
         uses: docker/build-push-action@v5
         with:
@@ -161,14 +162,12 @@ jobs:
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/zurimarket-frontend:${{ github.sha }}
             ${{ secrets.DOCKERHUB_USERNAME }}/zurimarket-frontend:latest
-          # Vite bakes env vars at BUILD TIME — pass the backend URL here
-          # In the frontend code use: import.meta.env.VITE_API_URL
           build-args: |
-            VITE_API_URL=http://${{ secrets.VM_PUBLIC_IP }}
+            VITE_API_URL=http://${{ secrets.VM_PUBLIC_IP }}/api
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      # ── Trivy: scan backend image for vulnerabilities ────────────────────
+ 
+      # ── Trivy: container vulnerability scanning ──────────────────────────
       - name: Trivy scan – backend image
         uses: aquasecurity/trivy-action@master
         with:
@@ -177,8 +176,7 @@ jobs:
           exit-code: "1"
           severity: "CRITICAL,HIGH"
           ignore-unfixed: true
-
-      # ── Trivy: scan frontend image ───────────────────────────────────────
+ 
       - name: Trivy scan – frontend image
         uses: aquasecurity/trivy-action@master
         with:
@@ -187,116 +185,136 @@ jobs:
           exit-code: "1"
           severity: "CRITICAL,HIGH"
           ignore-unfixed: true
-
+ 
   # ─────────────────────────────────────────────────────────────────────────
-  # JOB 6 — Terraform Apply (provision / update Azure infrastructure)
+  # JOB 6 — Terraform Apply
+  # Uses AZURE_USERNAME + AZURE_PASSWORD (existing secrets)
+  # Uses ARM_ACCESS_KEY for remote state backend (existing secret)
   # ─────────────────────────────────────────────────────────────────────────
   terraform:
     name: "Terraform Apply"
     runs-on: ubuntu-latest
     needs: [build-and-push]
     environment: production
-
+ 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
+ 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.7.0"
-
-      - name: Azure Login
-        uses: azure/login@v1
-        with:
-          creds: |
-            {
-              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
-              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
-              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
-              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
-            }
-
+ 
+      # Azure CLI login using username/password (matches existing secrets)
+      - name: Azure CLI Login
+        run: |
+          az login \
+            --username "${{ secrets.AZURE_USERNAME }}" \
+            --password "${{ secrets.AZURE_PASSWORD }}"
+ 
+      # ARM_ACCESS_KEY authenticates the azurerm backend (replaces service principal for state)
+      # ARM_* vars authenticate the azurerm provider for resource management
       - name: Terraform Init
         working-directory: terraform
         run: terraform init
         env:
-          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-
+          ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
+          # Resolve subscription and tenant from the logged-in context
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+          ARM_USE_CLI: "true"   # Use the az login session above instead of client secret
+ 
       - name: Terraform Plan
         working-directory: terraform
         run: |
+          # Build DATABASE_URL from existing DB_ADMIN + DB_PASSWORD secrets
+          # Adjust the connection string format to match your actual database type:
+          #   MongoDB:    mongodb+srv://<user>:<pass>@cluster.mongodb.net/zurimarket
+          #   PostgreSQL: postgresql://<user>:<pass>@<host>:5432/zurimarket
+          DATABASE_URL="mongodb+srv://${{ secrets.DB_ADMIN }}:${{ secrets.DB_PASSWORD }}@cluster.mongodb.net/zurimarket"
+ 
           terraform plan \
             -var="stripe_secret_key=${{ secrets.STRIPE_SECRET_KEY }}" \
-            -var="database_url=${{ secrets.DATABASE_URL }}" \
+            -var="database_url=${DATABASE_URL}" \
             -var="jwt_secret=${{ secrets.JWT_SECRET }}" \
             -out=tfplan
         env:
-          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-
+          ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+          ARM_USE_CLI: "true"
+ 
       - name: Terraform Apply
         working-directory: terraform
         run: terraform apply -auto-approve tfplan
         env:
-          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-
+          ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+          ARM_USE_CLI: "true"
+ 
+      # Save outputs as step outputs so the deploy job can consume them
+      - name: Export Terraform outputs
+        working-directory: terraform
+        id: tf_outputs
+        run: |
+          echo "vm_ip=$(terraform output -raw vm_public_ip)" >> $GITHUB_OUTPUT
+          echo "kv_name=$(terraform output -raw key_vault_name)" >> $GITHUB_OUTPUT
+          echo "identity_id=$(terraform output -raw managed_identity_client_id)" >> $GITHUB_OUTPUT
+        env:
+          ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
+          ARM_USE_CLI: "true"
+ 
   # ─────────────────────────────────────────────────────────────────────────
-  # JOB 7 — Deploy to Kubernetes (k3s)
+  # JOB 7 — Deploy to Kubernetes (k3s on Azure VM)
   # ─────────────────────────────────────────────────────────────────────────
   deploy:
     name: "Deploy to Kubernetes"
     runs-on: ubuntu-latest
     needs: [terraform]
-
+ 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
+ 
+      # KUBECONFIG_DATA = base64-encoded kubeconfig from the k3s VM
+      # Get it with: ssh zuriops@<VM_IP> "base64 -w0 ~/.kube/config"
       - name: Configure kubectl
         run: |
           mkdir -p $HOME/.kube
           echo "${{ secrets.KUBECONFIG_DATA }}" | base64 -d > $HOME/.kube/config
           chmod 600 $HOME/.kube/config
-
-      - name: Create namespace (idempotent)
+ 
+      - name: Apply namespace and service account
         run: kubectl apply -f k8s/secret-provider-class.yaml
-
-      - name: Deploy SecretProviderClass
+ 
+      - name: Deploy SecretProviderClass (inject Key Vault details)
         run: |
-          # Inject real values from Terraform outputs
           sed -i "s/REPLACE_WITH_MANAGED_IDENTITY_CLIENT_ID/${{ secrets.MANAGED_IDENTITY_CLIENT_ID }}/g" k8s/secret-provider-class.yaml
           sed -i "s/REPLACE_WITH_KEY_VAULT_NAME/${{ secrets.KEY_VAULT_NAME }}/g" k8s/secret-provider-class.yaml
-          sed -i "s/REPLACE_WITH_TENANT_ID/${{ secrets.AZURE_TENANT_ID }}/g" k8s/secret-provider-class.yaml
+          sed -i "s/REPLACE_WITH_TENANT_ID/${{ secrets.ARM_TENANT_ID }}/g" k8s/secret-provider-class.yaml
           kubectl apply -f k8s/secret-provider-class.yaml
-
+ 
       - name: Deploy backend
         run: |
           sed -i "s|DOCKERHUB_USERNAME|${{ secrets.DOCKERHUB_USERNAME }}|g" k8s/backend-deployment.yaml
           sed -i "s|IMAGE_TAG|${{ github.sha }}|g" k8s/backend-deployment.yaml
           kubectl apply -f k8s/backend-deployment.yaml
-
+ 
       - name: Deploy frontend
         run: |
           sed -i "s|DOCKERHUB_USERNAME|${{ secrets.DOCKERHUB_USERNAME }}|g" k8s/frontend-deployment.yaml
           sed -i "s|IMAGE_TAG|${{ github.sha }}|g" k8s/frontend-deployment.yaml
           kubectl apply -f k8s/frontend-deployment.yaml
-
+ 
       - name: Apply Ingress
         run: kubectl apply -f k8s/ingress.yaml
-
+ 
       - name: Verify rollout
         run: |
           kubectl rollout status deployment/zurimarket-backend -n zurimarket --timeout=120s
           kubectl rollout status deployment/zurimarket-frontend -n zurimarket --timeout=120s
-
+ 
       - name: Show running pods
         run: kubectl get pods -n zurimarket

@@ -6,8 +6,8 @@
 
 variable "location" {
   type        = string
-  default     = "uksouth"
-  description = "Azure region. UK South is closest to Zuri Market HQ (London)."
+  default     = "francecentral"
+  description = "Azure region. France Central used for student account AZ availability."
 }
 
 variable "environment" {
@@ -56,3 +56,12 @@ variable "jwt_secret" {
   default     = "placeholder-set-via-pipeline"
   description = "JWT signing secret — stored in Azure Key Vault."
 }
+
+# ── Azure auth variables (resolved from ARM_ env vars in CI) ──────────────────
+# These don't need to be set manually — Terraform reads ARM_SUBSCRIPTION_ID
+# and ARM_TENANT_ID from the environment automatically when ARM_USE_CLI=true.
+# Listed here only for documentation purposes.
+
+# ARM_SUBSCRIPTION_ID → set as GitHub Secret
+# ARM_TENANT_ID       → set as GitHub Secret
+# ARM_ACCESS_KEY      → set as GitHub Secret (storage account key for state)
